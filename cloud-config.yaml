@@ -1,0 +1,121 @@
+#cloud-config
+
+# Update package lists and upgrade installed packages
+package_update: true
+package_upgrade: true
+apt:
+  conf: |
+    DPkg::Options {
+      "--force-confnew";
+      "--force-confdef";
+    }
+  dpkg_options: ["--allow-downgrades", "--allow-remove-essential", "--allow-change-held-packages"]
+
+# Install essential packages
+packages:
+  - vim
+  - curl
+  - wget
+  - unzip
+  - htop
+  - net-tools
+  - fail2ban
+  - ufw
+
+# Configure timezone
+timezone: UTC
+
+# Create specific user with sudo privileges
+users:
+  - name: <user-name>
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - <enter your ssh public key here>
+
+# Write custom configurations
+write_files:
+  - path: /etc/needrestart/conf.d/99disable-prompt.conf
+    content: |
+      $nrconf{kernelhints} = -1;
+    permissions: '0644'
+
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = 60000
+      findtime = 6000
+      maxretry = 3
+      banaction = iptables-multiport
+      
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 60000
+      findtime = 6000
+    permissions: '0644'
+
+  - path: /etc/fail2ban/filter.d/sshd.local
+    content: |
+      [Definition]
+      failregex = ^%(__prefix_line)s(?:error: PAM: )?Authentication failure for .* from <HOST>( via \S+)?\s*$
+                  ^%(__prefix_line)s(?:error: PAM: )?User not known to the underlying authentication module for .* from <HOST>\s*$
+                  ^%(__prefix_line)sFailed \S+ for invalid user .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \(serial \d+\) CA )?\S+ %(__md5hex)s))?\s*$
+                  ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \(serial \d+\) CA )?\S+ %(__md5hex)s))?\s*$
+                  ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (?:ruser .*|(\S+ ID \S+ \(serial \d+\) CA )?\S+ %(__md5hex)s))?\s*$
+                  ^%(__prefix_line)sROOT LOGIN REFUSED.* FROM <HOST>\s*$
+                  ^%(__prefix_line)s[iI](?:llegal|nvalid) user .* from <HOST>\s*$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because not listed in AllowUsers\s*$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because listed in DenyUsers\s*$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because not in any group\s*$
+                  ^%(__prefix_line)srefused connect from \S+ \(<HOST>\)\s*$
+                  ^%(__prefix_line)sReceived disconnect from <HOST>: 3: \S+: Auth fail$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because a group is listed in DenyGroups\s*$
+                  ^%(__prefix_line)sUser .+ from <HOST> not allowed because none of user's groups are listed in AllowGroups\s*$
+                  ^%(__prefix_line)spam_unix\(sshd:auth\):\s+authentication failure;\s*logname=\S*\s*uid=\d*\s*euid=\d*\s*tty=\S*\s*ruser=\S*\s*rhost=<HOST>\s.*$
+      ignoreregex = 
+    permissions: '0644'
+
+# Configure system and security settings
+runcmd:
+  # Set up SSH directory and permissions
+  - mkdir -p /home/sn/.ssh
+  - echo "my-ssh-key" > /home/sn/.ssh/authorized_keys  # Replace with your actual public key
+  - chown -R sn:sn /home/sn/.ssh
+  - chmod 700 /home/sn/.ssh
+  - chmod 600 /home/sn/.ssh/authorized_keys
+
+  # Configure SSH security settings
+  - sed -i '/PermitRootLogin/d' /etc/ssh/sshd_config
+  - echo "PermitRootLogin without-password" >> /etc/ssh/sshd_config
+  - sed -i '/PubkeyAuthentication/d' /etc/ssh/sshd_config
+  - echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
+  - sed -i '/PasswordAuthentication/d' /etc/ssh/sshd_config
+  - echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+
+  # Configure UFW
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow ssh
+  - ufw allow http
+  - ufw allow https
+  - ufw --force enable
+
+  # Configure and start fail2ban
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - fail2ban-client reload
+  - fail2ban-client status
+
+  # Restart SSH service
+  - systemctl restart ssh
+
+  # Schedule a reboot
+  - shutdown -r +1 "Server will reboot in 1 minute"
+
+# Final message before reboot
+final_message: "Cloud-init setup completed. System will reboot in 1 minute."
